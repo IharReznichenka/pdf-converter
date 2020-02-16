@@ -1,20 +1,32 @@
 package pdf.converter.epub;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Collections;
+import java.util.List;
+import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
 import com.google.common.collect.Lists;
+
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.IOUtils;
 import org.joda.time.DateTime;
 import org.joda.time.format.DateTimeFormat;
-
-import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class EpubCreator {
+    private static final Logger log = LoggerFactory.getLogger(EpubCreator.class);
     private String timestamp;
     private String uuid;
     private File basedir;
@@ -23,17 +35,18 @@ public class EpubCreator {
     private File imgsDir;
 
     public void create(String title, File imgsDir, File output) throws IOException {
+        log.info("starting epub conversion into {}", output);
         timestamp = DateTimeFormat.forPattern("yyyy-MM-dd'T'hh:mm:ssSZZ").print(DateTime.now());
         uuid = UUID.randomUUID().toString();
         this.title = title;
         this.imgsDir = imgsDir;
 
         try {
-            basedir = File.createTempFile(uuid,"");
+            basedir = File.createTempFile(uuid, "");
             basedir.delete();
             basedir.mkdirs();
         } catch (IOException e) {
-            e.printStackTrace();
+            log.warn("", e);
         }
         classLoader = getClass().getClassLoader();
 
@@ -44,13 +57,17 @@ public class EpubCreator {
         createTitlePage();
         createTOC();
         pack(basedir.getAbsolutePath(), output.getAbsolutePath());
-        FileUtils.deleteDirectory(basedir);
+        try {
+            FileUtils.deleteDirectory(basedir);
+        } catch (IOException ex) {
+            log.warn("failed to remove base dir", ex);
+        }
     }
 
     private void copyImages() throws IOException {
         File imagesDir = new File(basedir, "images");
         imagesDir.mkdirs();
-        for(File file : listFiles()){
+        for (File file : listFiles()) {
             IOUtils.copy(new FileInputStream(file), new FileOutputStream(new File(imagesDir, file.getName())));
         }
     }
@@ -67,7 +84,7 @@ public class EpubCreator {
 
     private void createOPFFile() throws IOException {
         StringBuilder content = new StringBuilder();
-        for(File file : listFiles()){
+        for (File file : listFiles()) {
             content.append(String.format("<item href=\"images/%s\" id=\"%s\" media-type=\"image/png\"/>\n", file.getName(), idForImage(file.getName())));
         }
         String opf = readFileFromSrc("epub/content.opf");
@@ -83,7 +100,7 @@ public class EpubCreator {
 
     private void createIndex() throws IOException {
         StringBuilder content = new StringBuilder();
-        for(File file : listFiles()){
+        for (File file : listFiles()) {
             content.append(String.format("<p class=\"pdf-converter1\"><a id=\"%s\"></a><img src=\"images/%s\" class=\"pdf-converter2\"/></p>\n", idForImage(file.getName()), file.getName()));
         }
         String index = readFileFromSrc("epub/index.html");
@@ -114,10 +131,15 @@ public class EpubCreator {
     }
 
     private String readFileFromSrc(String path) throws IOException {
-        return IOUtils.toString(classLoader.getResourceAsStream(path));
+        final InputStream resource = classLoader.getResourceAsStream(path);
+        if (resource == null) {
+            log.warn("resource is missing `{}`", path);
+            return "";
+        }
+        return IOUtils.toString(resource, StandardCharsets.UTF_8.toString());
     }
 
-    private String idForImage(String name){
+    private String idForImage(String name) {
         return String.format("id%s", name.replace(".png", ""));
     }
 
@@ -134,13 +156,13 @@ public class EpubCreator {
                             zs.write(Files.readAllBytes(path));
                             zs.closeEntry();
                         } catch (Exception e) {
-                            System.err.println(e);
+                            log.error("", e);
                         }
                     });
         }
     }
 
-    private List<File> listFiles(){
+    private List<File> listFiles() {
         File[] files = imgsDir.listFiles((dir, name) -> {
             return name.toLowerCase().endsWith(".png");
         });
